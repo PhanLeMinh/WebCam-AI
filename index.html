@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MotionGuard AI — HOG+SVM Person Detection</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --bg:#0a0c10; --bg2:#111418; --bg3:#1a1f28; --border:#252c38;
+  --accent:#00e5ff; --danger:#ff3d5a; --warn:#ffb300; --success:#00e676;
+  --person:#ff3d5a; --object:#ff9100;
+  --txt:#e0e8f0; --txt2:#7a8a9a;
+  --font-h:'Syne',sans-serif; --font-m:'Space Mono',monospace;
+  --r:6px; --trans:.2s ease;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--txt);font-family:var(--font-m);font-size:13px;line-height:1.6;min-height:100vh;overflow-x:hidden;}
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,.012) 2px,rgba(0,229,255,.012) 4px);pointer-events:none;z-index:9999;}
+
+/* Header */
+header{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:var(--bg2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;}
+.logo{display:flex;align-items:center;gap:12px;}
+.logo-icon{width:34px;height:34px;background:var(--accent);clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);display:flex;align-items:center;justify-content:center;font-size:15px;animation:pulse-hex 2s ease-in-out infinite;}
+@keyframes pulse-hex{0%,100%{box-shadow:0 0 0 0 rgba(0,229,255,.4);}50%{box-shadow:0 0 0 10px rgba(0,229,255,0);}}
+.logo h1{font-family:var(--font-h);font-weight:800;font-size:19px;letter-spacing:2px;}
+.logo h1 span{color:var(--accent);}
+.status-bar{display:flex;gap:18px;align-items:center;}
+.status-dot{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--txt2);}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--txt2);}
+.dot.active{background:var(--success);animation:blink 1s infinite;}
+.dot.alert{background:var(--danger);animation:blink .5s infinite;}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:.3;}}
+
+/* Layout */
+.app{display:grid;grid-template-columns:260px 1fr 300px;height:calc(100vh - 55px);}
+.panel{background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;}
+.panel-right{border-right:none;border-left:1px solid var(--border);}
+.panel-title{font-family:var(--font-h);font-size:11px;font-weight:600;letter-spacing:3px;color:var(--accent);padding:13px 16px 10px;border-bottom:1px solid var(--border);text-transform:uppercase;}
+.panel-body{flex:1;overflow-y:auto;padding:16px;}
+.panel-body::-webkit-scrollbar{width:4px;}
+.panel-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+
+/* Center */
+.center{display:flex;flex-direction:column;background:var(--bg);}
+.video-area{flex:1;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;background:radial-gradient(ellipse at center,#0d1520 0%,var(--bg) 100%);}
+#video-display,#webcam-stream{max-width:100%;max-height:100%;border:1px solid var(--border);border-radius:var(--r);display:block;}
+.video-placeholder{display:flex;flex-direction:column;align-items:center;gap:14px;color:var(--txt2);text-align:center;}
+.video-placeholder .big-icon{font-size:60px;opacity:.3;animation:float 3s ease-in-out infinite;}
+@keyframes float{0%,100%{transform:translateY(0);}50%{transform:translateY(-10px);}}
+
+/* Alert banner */
+.alert-banner{background:var(--danger);color:#fff;font-family:var(--font-h);font-weight:800;font-size:13px;letter-spacing:1px;padding:10px 20px;display:none;align-items:center;gap:10px;animation:flash-bg .5s infinite alternate;}
+.alert-banner.show{display:flex;}
+@keyframes flash-bg{from{background:var(--danger);}to{background:#a00020;}}
+
+/* Legend bar */
+.legend-bar{padding:8px 16px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:16px;align-items:center;font-size:11px;}
+.legend-item{display:flex;align-items:center;gap:6px;}
+.legend-dot{width:12px;height:12px;border-radius:2px;}
+
+/* Control bar */
+.control-bar{padding:10px 16px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+
+/* Buttons */
+.btn{font-family:var(--font-m);font-size:11px;font-weight:700;letter-spacing:1px;padding:8px 14px;border-radius:var(--r);border:1px solid var(--border);background:var(--bg3);color:var(--txt);cursor:pointer;transition:var(--trans);text-transform:uppercase;}
+.btn:hover{border-color:var(--accent);color:var(--accent);}
+.btn.primary{background:var(--accent);color:var(--bg);border-color:var(--accent);}
+.btn.danger{border-color:var(--danger);color:var(--danger);}
+.btn.danger:hover{background:var(--danger);color:#fff;}
+.btn.success{border-color:var(--success);color:var(--success);}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+
+/* Upload */
+.upload-zone{border:2px dashed var(--border);border-radius:var(--r);padding:22px 14px;text-align:center;cursor:pointer;transition:var(--trans);color:var(--txt2);}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--accent);color:var(--accent);}
+.upload-zone .icon{font-size:26px;margin-bottom:6px;}
+#file-input{display:none;}
+
+/* Settings */
+.setting-item{margin-bottom:14px;}
+.setting-label{font-size:11px;color:var(--txt2);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;}
+.setting-label span{color:var(--accent);}
+input[type=range]{width:100%;accent-color:var(--accent);-webkit-appearance:none;height:4px;border-radius:2px;background:var(--border);cursor:pointer;}
+select{width:100%;background:var(--bg3);color:var(--txt);border:1px solid var(--border);border-radius:var(--r);padding:7px 10px;font-family:var(--font-m);font-size:12px;cursor:pointer;}
+.toggle-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);}
+.toggle-label{font-size:12px;color:var(--txt2);}
+.toggle{width:36px;height:20px;border-radius:10px;background:var(--border);position:relative;cursor:pointer;transition:var(--trans);}
+.toggle.on{background:var(--accent);}
+.toggle::after{content:'';position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#fff;transition:var(--trans);}
+.toggle.on::after{transform:translateX(16px);}
+
+/* Metric cards */
+.metrics-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;}
+.metric-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:11px 10px;text-align:center;}
+.metric-val{font-family:var(--font-h);font-size:22px;font-weight:800;color:var(--accent);}
+.metric-lbl{font-size:10px;color:var(--txt2);letter-spacing:1px;text-transform:uppercase;margin-top:2px;}
+
+/* Alert feed */
+.alert-item{background:var(--bg3);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:var(--r);padding:10px 12px;margin-bottom:8px;animation:slide-in .3s ease;}
+@keyframes slide-in{from{transform:translateX(8px);opacity:0;}to{transform:translateX(0);opacity:1;}}
+.alert-time{font-size:10px;color:var(--txt2);}
+.alert-msg{font-size:12px;margin-top:3px;}
+.alert-conf{font-size:10px;color:var(--warn);margin-top:2px;}
+
+/* Progress */
+.progress-bar{height:4px;background:var(--border);border-radius:2px;margin:8px 0;overflow:hidden;}
+.progress-fill{height:100%;background:var(--accent);border-radius:2px;width:0;transition:width .3s ease;}
+
+/* Frame grid */
+.frame-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;margin-top:10px;}
+.frame-thumb{position:relative;cursor:pointer;border-radius:var(--r);overflow:hidden;border:1px solid var(--border);transition:var(--trans);}
+.frame-thumb:hover{border-color:var(--accent);transform:scale(1.02);}
+.frame-thumb img{width:100%;display:block;}
+.frame-badge{position:absolute;top:4px;right:4px;padding:2px 6px;border-radius:3px;font-size:9px;font-weight:700;}
+.frame-badge.alert{background:var(--danger);color:#fff;}
+.frame-badge.ok{background:var(--success);color:var(--bg);}
+.frame-badge.motion{background:var(--warn);color:var(--bg);}
+
+/* Model badge */
+.model-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:20px;font-size:11px;}
+.model-badge.loaded{background:rgba(0,230,118,.15);color:var(--success);border:1px solid var(--success);}
+.model-badge.missing{background:rgba(255,179,0,.15);color:var(--warn);border:1px solid var(--warn);}
+
+/* Tabs */
+.tabs{display:flex;border-bottom:1px solid var(--border);padding:0 16px;}
+.tab{padding:10px 13px;font-size:11px;letter-spacing:1px;color:var(--txt2);cursor:pointer;border-bottom:2px solid transparent;transition:var(--trans);text-transform:uppercase;}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+.tab-content{display:none;}
+.tab-content.active{display:block;}
+
+/* Section header */
+.section-header{font-family:var(--font-h);font-size:10px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--txt2);margin:14px 0 8px;display:flex;align-items:center;gap:8px;}
+.section-header::after{content:'';flex:1;height:1px;background:var(--border);}
+
+/* Toast */
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--accent);color:var(--accent);padding:10px 20px;border-radius:var(--r);font-size:12px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9999;}
+#toast.show{opacity:1;}
+
+/* Legend */
+.legend-dot.person{background:var(--person);}
+.legend-dot.object{background:var(--object);}
+.legend-dot.motion{background:var(--success);}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">👁</div>
+    <h1>Motion<span>Guard</span> AI</h1>
+  </div>
+  <div class="status-bar">
+    <div class="status-dot">
+      <div class="dot" id="model-dot"></div>
+      <span id="model-status-txt">Loading YOLO...</span>
+    </div>
+    <div class="status-dot">
+      <div class="dot" id="webcam-dot"></div>
+      <span id="webcam-status-txt">Webcam off</span>
+    </div>
+    <div class="status-dot" id="alert-status" style="display:none">
+      <div class="dot alert"></div>
+      <span style="color:var(--danger);font-weight:700">NGƯỜI PHÁT HIỆN!</span>
+    </div>
+  </div>
+</header>
+
+<div class="app">
+
+  <!-- LEFT -->
+  <div class="panel">
+    <div class="panel-title">⚙ Điều Khiển</div>
+    <div class="panel-body">
+
+      <div class="section-header">📤 Upload Video</div>
+      <div class="upload-zone" id="upload-zone">
+        <div class="icon">🎬</div>
+        <div>Kéo thả hoặc click chọn video</div>
+        <div style="font-size:10px;margin-top:4px;color:var(--txt2)">MP4, AVI, MOV</div>
+      </div>
+      <input type="file" id="file-input" accept="video/*" />
+      <div id="upload-info" style="margin-top:8px;display:none">
+        <div style="font-size:11px;color:var(--txt2)" id="file-name"></div>
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+      </div>
+      <button class="btn primary" id="btn-analyze" style="width:100%;margin-top:10px" disabled>
+        ▶ Phân Tích Video
+      </button>
+
+      <div class="section-header" style="margin-top:18px">📷 Webcam Real-time</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn success" id="btn-webcam-start" style="flex:1">▶ Bắt Đầu</button>
+        <button class="btn danger"  id="btn-webcam-stop"  style="flex:1" disabled>■ Dừng</button>
+      </div>
+
+      <div class="section-header" style="margin-top:18px">🔧 Cài Đặt HOG + SVM</div>
+
+      <div class="setting-item">
+        <div class="setting-label">Mô hình</div>
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;font-size:11px;color:var(--txt2)">
+          HOG (3780 features) + LinearSVC<br>
+          <span style="color:var(--accent)">INRIA Person Dataset</span>
+        </div>
+      </div>
+
+      <div class="setting-item">
+        <div class="setting-label">SVM Threshold <span id="conf-val">0.00</span></div>
+        <input type="range" id="conf-slider" min="-50" max="50" value="0" step="5" />
+        <div style="font-size:10px;color:var(--txt2);margin-top:4px">
+          Âm = nhạy hơn (nhiều false positive) • Dương = chắc chắn hơn (ít phát hiện hơn)
+        </div>
+      </div>
+
+      <div class="toggle-row">
+        <span class="toggle-label">Bỏ qua YOLO khi không có chuyển động</span>
+        <div class="toggle on" id="toggle-skip"></div>
+      </div>
+
+      <button class="btn" id="btn-save-settings" style="width:100%;margin-top:12px">
+        💾 Lưu Cài Đặt
+      </button>
+
+    </div>
+  </div>
+
+  <!-- CENTER -->
+  <div class="center">
+    <div class="alert-banner" id="alert-banner">
+      👤 PHÁT HIỆN NGƯỜI — <span id="alert-detail">Đang xác nhận...</span>
+    </div>
+
+    <div class="video-area" id="video-area">
+      <div class="video-placeholder" id="video-placeholder">
+        <div class="big-icon">📹</div>
+        <div style="font-family:var(--font-h);font-size:17px;font-weight:800">MotionGuard AI</div>
+        <div style="font-size:11px;color:var(--txt2);max-width:280px">
+          Phát hiện người bằng HOG + LinearSVC — trích xuất 3780 features/window, phân loại người/nền
+        </div>
+      </div>
+      <img id="video-display" style="display:none" />
+      <img id="webcam-stream" style="display:none" />
+    </div>
+
+    <div class="legend-bar">
+      <span style="font-size:10px;color:var(--txt2);margin-right:4px">CHÚ THÍCH:</span>
+      <div class="legend-item">
+        <div class="legend-dot person"></div>
+        <span style="color:var(--person);font-size:11px">Người → Cảnh báo</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot object"></div>
+        <span style="color:var(--object);font-size:11px">Vật thể khác → Không cảnh báo</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot motion"></div>
+        <span style="color:var(--success);font-size:11px">Chuyển động phát hiện</span>
+      </div>
+    </div>
+
+    <div class="control-bar">
+      <div style="font-size:11px;color:var(--txt2)" id="frame-info">— Chưa có dữ liệu —</div>
+      <div style="flex:1"></div>
+      <button class="btn" id="btn-prev" disabled>◀</button>
+      <button class="btn" id="btn-next" disabled>▶</button>
+      <button class="btn danger" id="btn-clear-alerts">🗑 Xóa Log</button>
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="panel panel-right">
+    <div class="tabs">
+      <div class="tab active" data-tab="metrics">📊 Info</div>
+      <div class="tab" data-tab="alerts">🚨 Alerts</div>
+      <div class="tab" data-tab="frames">🖼 Frames</div>
+    </div>
+
+    <!-- Metrics tab -->
+    <div class="tab-content active panel-body" id="tab-metrics">
+
+      <div class="section-header">Model</div>
+      <div id="model-badge-container">
+        <span class="model-badge missing">⏳ Đang load YOLO...</span>
+      </div>
+      <div style="font-size:10px;color:var(--txt2);margin-top:6px" id="model-info"></div>
+
+      <div class="section-header" style="margin-top:14px">Session Stats</div>
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-val" id="s-frames" style="color:var(--txt)">0</div>
+          <div class="metric-lbl">Frames</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val" id="s-alerts" style="color:var(--danger)">0</div>
+          <div class="metric-lbl">Alerts</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val" id="s-persons" style="color:var(--person)">0</div>
+          <div class="metric-lbl">Người</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val" id="s-objects" style="color:var(--object)">0</div>
+          <div class="metric-lbl">Vật Thể</div>
+        </div>
+      </div>
+
+      <div class="section-header">Hướng Dẫn</div>
+      <div style="font-size:11px;color:var(--txt2);line-height:1.8">
+        <div>🔴 <span style="color:var(--person)">Bounding box đỏ</span> = người</div>
+        <div>🚨 Banner đỏ = có người xuất hiện</div>
+        <div>✅ Không có banner = an toàn</div>
+        <div style="margin-top:8px;padding:8px;background:var(--bg3);border-radius:var(--r);border:1px solid var(--border)">
+          💡 HOG trích xuất <b style="color:var(--accent)">3780 features</b>/window từ gradient hướng. LinearSVC phân loại người/nền. MOG2 lọc frame không có chuyển động để tăng tốc.
+        </div>
+      </div>
+    </div>
+
+    <!-- Alerts tab -->
+    <div class="tab-content panel-body" id="tab-alerts">
+      <div class="section-header">Log Phát Hiện Người</div>
+      <div id="alert-feed">
+        <div style="color:var(--txt2);font-size:11px;text-align:center;padding:20px" data-placeholder>
+          Chưa có cảnh báo nào
+        </div>
+      </div>
+    </div>
+
+    <!-- Frames tab -->
+    <div class="tab-content panel-body" id="tab-frames">
+      <div class="section-header">Frames Phân Tích</div>
+      <div style="font-size:10px;color:var(--txt2);margin-bottom:8px">
+        🔴 Đỏ = có người  •  🟡 Vàng = có chuyển động  •  🟢 Xanh = bình thường
+      </div>
+      <div class="frame-grid" id="frame-grid">
+        <div style="grid-column:1/-1;color:var(--txt2);font-size:11px;text-align:center;padding:20px">
+          Chưa có frame nào
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script src="script.js"></script>
+</body>
+</html>
